@@ -1,0 +1,36 @@
+# FastAPI and web framework dependencies
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+python-multipart==0.0.6
+
+# HTTP requests and RSS feed parsing
+requests==2.31.0
+feedparser==6.0.10
+beautifulsoup4==4.12.2
+lxml==4.9.3
+
+# Vector database and embeddings
+pinecone>=5.0.0
+cohere>=4.37
+
+# LLM integration
+groq==0.4.1
+
+# Data processing and utilities
+pandas==2.1.4
+numpy>=1.26.0
+python-dateutil==2.8.2
+
+# Environment and configuration
+python-dotenv==1.0.0
+pydantic-settings>=2.0.0
+pyyaml==6.0.1
+
+# Logging and monitoring
+loguru==0.7.2
+
+# Development and testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+httpx==0.25.2
