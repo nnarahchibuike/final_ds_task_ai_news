@@ -66,8 +66,10 @@ class NewsProcessor:
             logger.warning(f"Raw news directory does not exist: {raw_dir}")
             return processed_files
         
-        raw_files = list(raw_dir.glob("*.json"))
-        logger.info(f"Found {len(raw_files)} raw news files to process")
+        # Find raw news files (exclude seen_articles.json and other non-article files)
+        all_json_files = list(raw_dir.glob("*.json"))
+        raw_files = [f for f in all_json_files if f.name.startswith("raw_news_")]
+        logger.info(f"Found {len(raw_files)} raw news files to process (excluded {len(all_json_files) - len(raw_files)} non-article files)")
         
         for raw_file in raw_files:
             try:

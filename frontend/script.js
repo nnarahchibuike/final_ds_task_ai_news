@@ -160,7 +160,10 @@ function displayRecommendations(recommendations) {
         
         const date = formatDate(article.date);
         const sourceName = extractSourceName(article.source);
-        
+
+        // Get up to 3 tags for recommendations
+        const tags = article.tags ? article.tags.slice(0, 3) : [];
+
         item.innerHTML = `
             <div class="recommendation-title">
                 <a href="${article.url}" target="_blank" rel="noopener noreferrer">
@@ -170,6 +173,11 @@ function displayRecommendations(recommendations) {
             <div class="recommendation-summary">
                 ${escapeHtml(article.summary || 'No summary available.')}
             </div>
+            ${tags.length > 0 ? `
+                <div class="news-tags" style="margin-top: 8px;">
+                    ${tags.map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}
+                </div>
+            ` : ''}
             <div class="news-meta" style="margin-top: 8px;">
                 <span class="news-source">${escapeHtml(sourceName)}</span>
                 <span class="news-date">${date}</span>

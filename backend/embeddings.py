@@ -2,6 +2,7 @@
 Embeddings module for generating vector representations of news articles using Cohere.
 """
 import cohere
+import time
 from typing import List, Dict, Any
 from loguru import logger
 from config import get_settings
@@ -23,31 +24,50 @@ class EmbeddingGenerator:
     
     def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
-        Generate embeddings for a list of texts.
-        
+        Generate embeddings for a list of texts with rate limiting for trial accounts.
+
         Args:
             texts: List of text strings to embed
-            
+
         Returns:
             List of embedding vectors
         """
         try:
             if not texts:
                 return []
-            
-            logger.info(f"Generating embeddings for {len(texts)} texts")
-            
-            response = self.client.embed(
-                texts=texts,
-                model=self.model,
-                input_type="search_document"
-            )
-            
-            embeddings = response.embeddings
-            logger.info(f"Successfully generated {len(embeddings)} embeddings")
-            
-            return embeddings
-            
+
+            # For trial accounts, process in smaller batches with rate limiting
+            # Trial limit: 100,000 tokens per minute
+            # Estimate ~100 tokens per 75 words, so ~1000 tokens per article
+            max_batch_size = settings.cohere_batch_size
+            delay_between_batches = settings.cohere_rate_limit_delay
+
+            all_embeddings = []
+
+            for i in range(0, len(texts), max_batch_size):
+                batch = texts[i:i + max_batch_size]
+
+                logger.info(f"Generating embeddings for batch {i//max_batch_size + 1}: {len(batch)} texts")
+
+                # Add delay between batches to respect rate limits
+                if i > 0:
+                    logger.info(f"Rate limiting: waiting {delay_between_batches} seconds...")
+                    time.sleep(delay_between_batches)
+
+                response = self.client.embed(
+                    texts=batch,
+                    model=self.model,
+                    input_type="search_document"
+                )
+
+                batch_embeddings = response.embeddings
+                all_embeddings.extend(batch_embeddings)
+
+                logger.info(f"Successfully generated {len(batch_embeddings)} embeddings for batch")
+
+            logger.info(f"Successfully generated {len(all_embeddings)} total embeddings")
+            return all_embeddings
+
         except Exception as e:
             logger.error(f"Error generating embeddings: {str(e)}")
             raise

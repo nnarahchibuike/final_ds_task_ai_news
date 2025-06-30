@@ -179,6 +179,7 @@ class VectorStore:
                         'published': metadata.get('published', ''),
                         'source_name': metadata.get('source_name', ''),
                         'category': metadata.get('category', 'general'),
+                        'tags': metadata.get('tags', []),
                         'similarity_score': similarity_score,
                         'content_preview': metadata.get('content_preview', '')
                     }
@@ -350,6 +351,7 @@ class VectorStore:
                         'published': metadata.get('published', ''),
                         'source_name': metadata.get('source_name', ''),
                         'category': metadata.get('category', 'general'),
+                        'tags': metadata.get('tags', []),
                         'similarity_score': similarity_score,
                         'content_preview': metadata.get('content_preview', '')
                     }

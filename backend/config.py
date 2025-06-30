@@ -23,38 +23,26 @@ class Settings(BaseSettings):
     pinecone_namespace: str = os.getenv("PINECONE_NAMESPACE", "default")
     
     # Data directories
-    raw_news_dir: str = os.getenv("RAW_NEWS_DIR", "../data/raw_news")
-    processed_news_dir: str = os.getenv("PROCESSED_NEWS_DIR", "../data/processed_news")
+    raw_news_dir: str = os.getenv("RAW_NEWS_DIR", "data/raw_news")
+    processed_news_dir: str = os.getenv("PROCESSED_NEWS_DIR", "data/processed_news")
     
     # RSS Feed URLs organized by category
     rss_feeds: Dict[str, List[str]] = {
-        "mainstream_news": [
-            "https://feeds.bbci.co.uk/news/rss.xml",
-            "https://www.npr.org/rss/rss.php?id=1001",
-            "https://www.theguardian.com/world/rss",
-        ],
-        "music": [
-            "https://www.billboard.com/feed/",
-            "https://pitchfork.com/rss/news/",
-        ],
-        "gaming": [
-            "https://www.polygon.com/rss/index.xml",
+        "general": [
             "https://kotaku.com/rss",
-        ],
-        "tech": [
-            "https://www.theverge.com/rss/index.xml",
-            "https://feeds.arstechnica.com/arstechnica/index",
-        ],
-        "lifestyle": [
-            "https://lifehacker.com/rss",
-            "https://www.buzzfeed.com/index.xml",
+            "https://pitchfork.com/rss/news/",
             "https://www.allrecipes.com/rss/daily-dish/",
         ]
+
     }
     
     # Embedding settings
     embedding_model: str = "embed-english-v3.0"
     embedding_dimension: int = 1024
+
+    # Cohere API rate limiting (for trial accounts)
+    cohere_batch_size: int = int(os.getenv("COHERE_BATCH_SIZE", "10"))
+    cohere_rate_limit_delay: float = float(os.getenv("COHERE_RATE_LIMIT_DELAY", "6.0"))
     
     # LLM settings
     groq_model: str = "meta-llama/llama-4-scout-17b-16e-instruct"
@@ -89,6 +77,7 @@ class Settings(BaseSettings):
 
     # Pipeline settings
     pipeline_mode: bool = False  # True when running standalone pipeline
+    skip_vector_operations: bool = os.getenv("SKIP_VECTOR_OPERATIONS", "false").lower() == "true"
     cleanup_old_files: bool = True
     max_raw_files_to_keep: int = 10
     max_processed_files_to_keep: int = 10

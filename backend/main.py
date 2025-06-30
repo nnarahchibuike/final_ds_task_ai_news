@@ -93,7 +93,7 @@ async def recommend_news(article_id: str, max_results: Optional[int] = None):
                 "url": article.get('link', ''),
                 "source": article.get('source_name', ''),
                 "categories": [article.get('category', 'general')],
-                "tags": [],  # Vector store doesn't return tags in search results
+                "tags": article.get('tags', []),  # Now includes tags from vector store metadata
                 "summary": article.get('summary', ''),
                 "author": '',
                 "slug": '',
