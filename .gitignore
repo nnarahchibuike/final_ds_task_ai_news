@@ -71,8 +71,8 @@ ehthumbs.db
 Thumbs.db
 
 # Project specific
-data/raw_news/*.json
-data/processed_news/*.json
+# data/raw_news/*.json
+# data/processed_news/*.json
 logs/
 *.log
 
