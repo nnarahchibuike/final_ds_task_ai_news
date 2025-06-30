@@ -7,8 +7,10 @@ DS Task AI News is an AI-powered news retrieval API that gathers news articles f
 - **News Aggregation**: Fetches news using categorized RSS feeds (Mainstream News, Music, Gaming, Tech, Lifestyle)
 - **Vector Database Storage**: Stores news articles in Pinecone for efficient similarity searches
 - **AI-powered Recommendations**: Uses Cohere embeddings to provide relevant news recommendations
-- **FastAPI Backend**: Clean REST API with automatic documentation
+- **Clean Web Interface**: Modern, responsive frontend with glassmorphism design
+- **FastAPI Backend**: Clean REST API with automatic documentation and static file serving
 - **Background Processing**: Asynchronous news fetching and vector storage
+- **Unified Application**: Frontend and backend served from single command
 - **Scalable Architecture**: Designed for easy integration and deployment
 
 ## Quick Start
@@ -37,10 +39,21 @@ DS Task AI News is an AI-powered news retrieval API that gathers news articles f
    PINECONE_API_KEY=your_pinecone_api_key_here
    ```
 
-3. **Start the API server:**
+3. **Run the application:**
 
    ```bash
-   ./run.sh  # On Windows: run.bat
+   # Option 1: Simple startup (recommended)
+   python start_app.py
+
+   # Option 2: Use the management script
+   python run_pipeline.py
+
+   # Option 3: Manual steps
+   # Step 1: Run the preprocessing pipeline
+   python pipeline.py
+
+   # Step 2: Start the API server and frontend
+   python backend/main.py
    ```
 
 4. **Access the API:**
@@ -48,12 +61,44 @@ DS Task AI News is an AI-powered news retrieval API that gathers news articles f
    - **Interactive Documentation**: http://localhost:8000/docs
    - **Alternative Documentation**: http://localhost:8000/redoc
 
+## New Workflow: Standalone Pipeline
+
+This system now uses a **standalone preprocessing pipeline** that runs independently before the API:
+
+### Pipeline Commands
+
+```bash
+# Run complete workflow (pipeline + API)
+python run_pipeline.py
+
+# Run only the preprocessing pipeline
+python run_pipeline.py --pipeline
+
+# Start only the API (requires processed data)
+python run_pipeline.py --api
+
+# Check system status
+python run_pipeline.py --status
+
+# Clean old data files
+python run_pipeline.py --clean
+```
+
+### Pipeline Process
+
+1. **Raw News Fetching**: Collects articles from RSS feeds
+2. **AI Enhancement**: Uses Groq LLM for summaries and metadata
+3. **Vector Storage**: Generates embeddings and stores in Pinecone
+4. **API Output**: Creates processed files for fast API responses
+
 ## API Endpoints
 
 ### Core Endpoints
 
-- `GET /fetch-news` - Fetch latest news from RSS feeds and return articles
+- `GET /fetch-news` - Load processed news articles from pipeline output
 - `GET /recommend-news?article_id={id}&max_results={n}` - Get news recommendations based on an article ID
+
+**Note**: The `/fetch-news` endpoint now reads from pre-processed files. To get fresh articles, run the pipeline first.
 
 ### Documentation
 
@@ -62,7 +107,7 @@ DS Task AI News is an AI-powered news retrieval API that gathers news articles f
 
 ### Example Usage
 
-**Fetch Latest News:**
+**Load Processed News:**
 ```bash
 curl -X GET "http://localhost:8000/fetch-news"
 ```
@@ -72,25 +117,44 @@ curl -X GET "http://localhost:8000/fetch-news"
 curl -X GET "http://localhost:8000/recommend-news?article_id=bbc_abc123&max_results=5"
 ```
 
+**Complete Workflow Example:**
+```bash
+# 1. Run the preprocessing pipeline
+python pipeline.py
+
+# 2. Start the API server
+python backend/main.py
+
+# 3. Load processed articles
+curl -X GET "http://localhost:8000/fetch-news"
+
+# 4. Get recommendations for an article
+curl -X GET "http://localhost:8000/recommend-news?article_id=<article_id>&max_results=5"
+```
+
 ## Project Structure
 
 ```
 DS_Task_AI_News/
+├── pipeline.py             # NEW: Standalone preprocessing pipeline
+├── run_pipeline.py         # NEW: Pipeline management script
 ├── backend/
-│   ├── main.py              # FastAPI backend
-│   ├── news_fetcher.py      # Fetches news using RSS feeds
-│   ├── vector_store.py      # Handles vector database operations
-│   ├── embeddings.py        # Generates embeddings using Cohere
-│   ├── recommender.py       # Fetches related news articles
-│   ├── config.py            # Configuration settings
+│   ├── main.py              # MODIFIED: FastAPI backend (reads processed data)
+│   ├── news_fetcher.py      # USED BY: Pipeline for RSS fetching
+│   ├── news_processor.py    # USED BY: Pipeline for AI enhancement
+│   ├── vector_store.py      # USED BY: Both pipeline and API
+│   ├── embeddings.py        # USED BY: Pipeline for embeddings
+│   ├── recommender.py       # USED BY: API for recommendations
+│   ├── config.py            # SHARED: Configuration settings
 │   ├── requirements.txt     # Dependencies
 │   └── debug_rss.py         # RSS debugging utility
 ├── data/
-│   ├── raw_news/           # Stores raw news articles before processing
-│   └── processed_news/     # Stores cleaned and processed articles
+│   ├── raw_news/           # CREATED BY: Pipeline (raw articles)
+│   └── processed_news/     # CREATED BY: Pipeline, READ BY: API
 ├── docs/
 │   ├── README.md           # Documentation for new developers
 │   └── API_Documentation.md # API details
+├── rss.py                  # RSS feed processing module
 ├── setup.sh / setup.bat    # Setup scripts
 ├── run.sh / run.bat        # Run scripts
 ├── .env                    # Environment variables

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI News Hub</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1 class="logo">
+                    <i class="fas fa-newspaper"></i>
+                    AI News Hub
+                </h1>
+                <div class="header-stats">
+                    <span id="article-count">Loading...</span>
+                    <span id="last-updated">Last updated: --</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Loading State -->
+        <div id="loading" class="loading">
+            <div class="loading-spinner">
+                <i class="fas fa-spinner fa-spin"></i>
+            </div>
+            <p>Loading latest news...</p>
+        </div>
+
+        <!-- Error State -->
+        <div id="error" class="error hidden">
+            <div class="error-content">
+                <i class="fas fa-exclamation-triangle"></i>
+                <h3>Unable to load news</h3>
+                <p id="error-message">Please try again later.</p>
+                <button onclick="fetchNews()" class="retry-btn">
+                    <i class="fas fa-redo"></i>
+                    Retry
+                </button>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <main id="main-content" class="main-content hidden">
+            <!-- News Grid -->
+            <div id="news-grid" class="news-grid">
+                <!-- News articles will be dynamically inserted here -->
+            </div>
+        </main>
+
+        <!-- Recommendations Modal -->
+        <div id="recommendations-modal" class="modal hidden">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Related Articles</h3>
+                    <button class="close-btn" onclick="closeRecommendations()">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div id="recommendations-loading" class="loading-small">
+                        <i class="fas fa-spinner fa-spin"></i>
+                        Finding related articles...
+                    </div>
+                    <div id="recommendations-content" class="recommendations-content hidden">
+                        <!-- Recommendations will be inserted here -->
+                    </div>
+                    <div id="recommendations-error" class="error-small hidden">
+                        <i class="fas fa-exclamation-circle"></i>
+                        <span>Unable to load recommendations</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Overlay for modal -->
+        <div id="modal-overlay" class="modal-overlay hidden" onclick="closeRecommendations()"></div>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>

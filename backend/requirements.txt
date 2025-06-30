@@ -9,6 +9,7 @@ requests==2.31.0
 feedparser==6.0.10
 beautifulsoup4==4.12.2
 lxml==4.9.3
+html2text==2020.1.16
 
 # Vector database and embeddings
 pinecone>=5.0.0

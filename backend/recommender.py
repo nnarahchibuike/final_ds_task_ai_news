@@ -2,7 +2,6 @@
 Recommender module for finding and ranking related news articles.
 """
 import cohere
-from groq import Groq
 from typing import List, Dict, Any, Optional
 from loguru import logger
 from config import get_settings
@@ -12,35 +11,31 @@ settings = get_settings()
 
 
 class NewsRecommender:
-    """Handles news recommendation using vector similarity and AI re-ranking."""
-    
+    """Handles news recommendation using vector similarity and optional re-ranking."""
+
     def __init__(self):
-        """Initialize the recommender with Cohere and Groq clients."""
+        """Initialize the recommender with Cohere client."""
         # Initialize Cohere for re-ranking
         if settings.cohere_api_key:
             self.cohere_client = cohere.Client(settings.cohere_api_key)
         else:
             self.cohere_client = None
             logger.warning("Cohere API key not provided, re-ranking will be disabled")
-        
-        # Initialize Groq for LLM analysis
-        if settings.groq_api_key:
-            self.groq_client = Groq(api_key=settings.groq_api_key)
-        else:
-            self.groq_client = None
-            logger.warning("Groq API key not provided, LLM analysis will be disabled")
-        
+
         self.vector_store = get_vector_store()
         logger.info("Initialized NewsRecommender")
     
     def get_recommendations(self, query: str, max_results: int = None) -> List[Dict[str, Any]]:
         """
-        Get news recommendations based on a query.
-        
+        Get news recommendations based on a text query.
+
+        Note: For article-to-article similarity, use get_similar_articles() instead,
+        which is optimized to use existing vectors without re-embedding.
+
         Args:
             query: User query or interest description
             max_results: Maximum number of recommendations to return
-            
+
         Returns:
             List of recommended articles with scores
         """
@@ -68,11 +63,7 @@ class NewsRecommender:
             
             # Limit to requested number of results
             final_recommendations = reranked_articles[:max_results]
-            
-            # Add AI insights if Groq is available
-            if self.groq_client:
-                final_recommendations = self._add_ai_insights(query, final_recommendations)
-            
+
             logger.info(f"Returning {len(final_recommendations)} recommendations")
             return final_recommendations
             
@@ -122,62 +113,14 @@ class NewsRecommender:
             # Return original order if re-ranking fails
             return articles
     
-    def _add_ai_insights(self, query: str, articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Add AI-generated insights to recommended articles.
-        
-        Args:
-            query: Original query
-            articles: List of recommended articles
-            
-        Returns:
-            Articles with AI insights added
-        """
-        try:
-            logger.info("Adding AI insights to recommendations")
-            
-            # Create a summary of all articles for context
-            articles_summary = "\n".join([
-                f"- {article['title']}: {article['summary'][:100]}..."
-                for article in articles[:5]  # Limit to top 5 for context
-            ])
-            
-            prompt = f"""
-            Based on the user query: "{query}"
-            
-            Here are the top recommended news articles:
-            {articles_summary}
-            
-            Provide a brief insight (2-3 sentences) about why these articles are relevant to the user's interest and what key themes or trends they represent.
-            """
-            
-            response = self.groq_client.chat.completions.create(
-                model=settings.groq_model,
-                messages=[
-                    {"role": "system", "content": "You are a helpful news analyst that provides insights about news recommendations."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=settings.max_tokens,
-                temperature=settings.temperature
-            )
-            
-            ai_insight = response.choices[0].message.content
-            
-            # Add insight to the first article or as a separate field
-            if articles:
-                articles[0]['ai_insight'] = ai_insight
-            
-            logger.info("Successfully added AI insights")
-            return articles
-            
-        except Exception as e:
-            logger.error(f"Error adding AI insights: {str(e)}")
-            # Return articles without insights if AI analysis fails
-            return articles
+
     
     def get_similar_articles(self, article_id: str, max_results: int = None) -> List[Dict[str, Any]]:
         """
         Get articles similar to a specific article by ID.
+
+        This method is now optimized to use the article's existing vector directly,
+        eliminating redundant embedding generation and improving performance.
 
         Args:
             article_id: ID of the source article to find similar articles for
@@ -192,31 +135,33 @@ class NewsRecommender:
         try:
             logger.info(f"Getting similar articles for article ID: {article_id}")
 
-            # Get the source article
-            source_article = self.vector_store.get_article_by_id(article_id)
-            if not source_article:
-                logger.warning(f"Article with ID {article_id} not found")
-                return []
-
-            # Create query from article title and content
-            query_text = f"{source_article['title']} {source_article.get('summary', '')}"
-            logger.info(f"Using query text: {query_text[:100]}...")
-
-            # Get similar articles using the existing recommendation logic
-            # Request more results to account for filtering out the source article
-            similar_articles = self.get_recommendations(
-                query=query_text,
-                max_results=max_results + 1  # +1 to account for source article removal
+            # Use the optimized vector search method - no re-embedding needed!
+            similar_articles = self.vector_store.search_similar_by_id(
+                article_id=article_id,
+                n_results=max_results * 2,  # Get more for potential re-ranking
+                exclude_source=True  # Automatically excludes the source article
             )
 
-            # Filter out the source article from recommendations
-            filtered_articles = [
-                article for article in similar_articles
-                if article.get('id') != article_id
-            ]
+            if not similar_articles:
+                logger.info(f"No similar articles found for article {article_id}")
+                return []
+
+            # Optional: Re-rank articles using Cohere if available and beneficial
+            # Note: For article-to-article similarity, vector similarity is often sufficient
+            # Re-ranking is more useful for text queries than article-to-article matching
+            if self.cohere_client and len(similar_articles) > max_results:
+                # Only re-rank if we have more results than needed
+                source_article = self.vector_store.get_article_by_id(article_id)
+                if source_article:
+                    query_text = f"{source_article['title']} {source_article.get('summary', '')}"
+                    reranked_articles = self._rerank_articles(query_text, similar_articles)
+                else:
+                    reranked_articles = similar_articles
+            else:
+                reranked_articles = similar_articles
 
             # Limit to requested number of results
-            final_results = filtered_articles[:max_results]
+            final_results = reranked_articles[:max_results]
 
             logger.info(f"Returning {len(final_results)} similar articles for article {article_id}")
             return final_results
@@ -227,66 +172,71 @@ class NewsRecommender:
 
     def get_trending_topics(self, limit: int = 10) -> List[Dict[str, Any]]:
         """
-        Analyze trending topics from recent articles.
-        
+        Get trending topics based on recent articles.
+
+        Note: This method now returns a simplified analysis based on article categories
+        and titles without AI-generated insights.
+
         Args:
             limit: Number of trending topics to return
-            
+
         Returns:
-            List of trending topics with analysis
+            List of trending topics with basic analysis
         """
         try:
             logger.info("Analyzing trending topics")
-            
-            # Get recent articles (this is a simplified approach)
-            # In a real implementation, you might want to filter by date
+
+            # Get recent articles
             recent_articles = self.vector_store.search_similar_articles(
                 query="news today current events",
                 n_results=50
             )
-            
-            if not recent_articles or not self.groq_client:
+
+            if not recent_articles:
                 return []
-            
-            # Create summary of recent articles
-            articles_text = "\n".join([
-                f"- {article['title']}"
-                for article in recent_articles[:20]
-            ])
-            
-            prompt = f"""
-            Analyze these recent news headlines and identify the top {limit} trending topics or themes:
-            
-            {articles_text}
-            
-            For each trending topic, provide:
-            1. Topic name
-            2. Brief description (1-2 sentences)
-            3. Why it's trending
-            
-            Format as a JSON list with objects containing: topic, description, reason
-            """
-            
-            response = self.groq_client.chat.completions.create(
-                model=settings.groq_model,
-                messages=[
-                    {"role": "system", "content": "You are a news analyst that identifies trending topics. Always respond with valid JSON."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=settings.max_tokens,
-                temperature=0.3
-            )
-            
-            # Parse the response (simplified - in production, add better error handling)
-            import json
-            try:
-                trending_topics = json.loads(response.choices[0].message.content)
-                logger.info(f"Identified {len(trending_topics)} trending topics")
-                return trending_topics
-            except json.JSONDecodeError:
-                logger.error("Failed to parse trending topics JSON response")
-                return []
-            
+
+            # Simple trending analysis based on categories and keywords
+            category_counts = {}
+            keyword_counts = {}
+
+            for article in recent_articles:
+                # Count categories
+                category = article.get('category', 'general')
+                category_counts[category] = category_counts.get(category, 0) + 1
+
+                # Extract keywords from titles (simple approach)
+                title_words = article.get('title', '').lower().split()
+                for word in title_words:
+                    if len(word) > 4:  # Only consider longer words
+                        keyword_counts[word] = keyword_counts.get(word, 0) + 1
+
+            # Create trending topics from top categories and keywords
+            trending_topics = []
+
+            # Add top categories
+            sorted_categories = sorted(category_counts.items(), key=lambda x: x[1], reverse=True)
+            for category, count in sorted_categories[:limit//2]:
+                trending_topics.append({
+                    "topic": category.title(),
+                    "description": f"Popular category with {count} recent articles",
+                    "reason": f"High activity in {category} news",
+                    "article_count": count
+                })
+
+            # Add top keywords
+            sorted_keywords = sorted(keyword_counts.items(), key=lambda x: x[1], reverse=True)
+            for keyword, count in sorted_keywords[:limit//2]:
+                if len(trending_topics) < limit:
+                    trending_topics.append({
+                        "topic": keyword.title(),
+                        "description": f"Frequently mentioned keyword in {count} articles",
+                        "reason": f"High frequency in recent headlines",
+                        "mention_count": count
+                    })
+
+            logger.info(f"Identified {len(trending_topics)} trending topics")
+            return trending_topics[:limit]
+
         except Exception as e:
             logger.error(f"Error analyzing trending topics: {str(e)}")
             return []

@@ -4,7 +4,7 @@ News fetcher module for retrieving news articles from RSS feeds.
 import feedparser
 import requests
 from bs4 import BeautifulSoup
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 from datetime import datetime
 import json
 import os
@@ -38,8 +38,58 @@ class NewsFetcher:
         self.session.headers.update({
             'User-Agent': 'DS-Task-AI-News/1.0 (News Aggregator)'
         })
+        self._seen_articles: Set[str] = set()  # For deduplication
+        self._load_seen_articles()
         logger.info("Initialized NewsFetcher")
-    
+
+    def _load_seen_articles(self):
+        """Load previously seen article IDs for deduplication."""
+        if not settings.deduplication_enabled:
+            return
+
+        try:
+            seen_file = os.path.join(settings.raw_news_dir, 'seen_articles.json')
+            if os.path.exists(seen_file):
+                with open(seen_file, 'r', encoding='utf-8') as f:
+                    seen_list = json.load(f)
+                    self._seen_articles = set(seen_list)
+                logger.info(f"Loaded {len(self._seen_articles)} seen article IDs")
+        except Exception as e:
+            logger.warning(f"Could not load seen articles: {e}")
+
+    def _save_seen_articles(self):
+        """Save seen article IDs for future deduplication."""
+        if not settings.deduplication_enabled:
+            return
+
+        try:
+            os.makedirs(settings.raw_news_dir, exist_ok=True)
+            seen_file = os.path.join(settings.raw_news_dir, 'seen_articles.json')
+            with open(seen_file, 'w', encoding='utf-8') as f:
+                json.dump(list(self._seen_articles), f)
+            logger.debug(f"Saved {len(self._seen_articles)} seen article IDs")
+        except Exception as e:
+            logger.warning(f"Could not save seen articles: {e}")
+
+    def _generate_article_hash(self, article: Dict[str, Any]) -> str:
+        """Generate a hash for an article for deduplication."""
+        content_for_hash = f"{article.get('title', '')}{article.get('url', '')}"
+        return hashlib.md5(content_for_hash.encode('utf-8')).hexdigest()
+
+    def _is_duplicate(self, article: Dict[str, Any]) -> bool:
+        """Check if an article is a duplicate."""
+        if not settings.deduplication_enabled:
+            return False
+
+        article_hash = self._generate_article_hash(article)
+        return article_hash in self._seen_articles
+
+    def _mark_as_seen(self, article: Dict[str, Any]):
+        """Mark an article as seen."""
+        if settings.deduplication_enabled:
+            article_hash = self._generate_article_hash(article)
+            self._seen_articles.add(article_hash)
+
     def fetch_from_rss(self, rss_url: str, category: str = "general") -> List[Dict[str, Any]]:
         """
         Fetch articles from a single RSS feed.
@@ -54,36 +104,32 @@ class NewsFetcher:
         try:
             logger.info(f"Fetching from RSS feed: {rss_url} (category: {category})")
 
-            # Use requests with SSL verification disabled for better compatibility
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
-
-            try:
-                response = requests.get(rss_url, headers=headers, verify=False, timeout=30)
-                response.raise_for_status()
-                feed = feedparser.parse(response.content)
-            except Exception as req_error:
-                logger.warning(f"Requests failed for {rss_url}, trying feedparser directly: {req_error}")
-                feed = feedparser.parse(rss_url)
+            # Parse RSS feed
+            feed = feedparser.parse(rss_url)
 
             if feed.bozo:
                 logger.warning(f"RSS feed may have issues: {rss_url} - {getattr(feed, 'bozo_exception', 'Unknown error')}")
 
+            # Process entries
             articles = []
-
             for entry in feed.entries[:settings.max_articles_per_feed]:
                 article = self._parse_rss_entry(entry, rss_url, category)
-                if article:
+                if article and not self._is_duplicate(article):
                     articles.append(article)
+                    self._mark_as_seen(article)
+                else:
+                    if article:
+                        logger.debug(f"Skipping duplicate article: {article.get('title', 'Unknown')[:50]}...")
 
-            logger.info(f"Fetched {len(articles)} articles from {rss_url} (category: {category})")
+            logger.info(f"Fetched {len(articles)} new articles from {rss_url} (category: {category})")
             return articles
 
         except Exception as e:
             logger.error(f"Error fetching from RSS feed {rss_url}: {str(e)}")
             return []
-    
+
+
+
     def _parse_rss_entry(self, entry: Any, source_url: str, category: str = "general") -> Optional[Dict[str, Any]]:
         """
         Parse a single RSS entry into an article dictionary.
@@ -101,7 +147,7 @@ class NewsFetcher:
             title = getattr(entry, 'title', '')
             link = getattr(entry, 'link', '')
             summary = getattr(entry, 'summary', '')
-            
+
             # Parse publication date
             published = None
             if hasattr(entry, 'published_parsed') and entry.published_parsed:
@@ -113,48 +159,130 @@ class NewsFetcher:
                     published = datetime.now()
             else:
                 published = datetime.now()
-            
-            # Extract content
+
+            # Extract content using enhanced method
             content = self._extract_content(entry)
-            
+
+            # Extract categories from RSS tags
+            categories = self._extract_categories(entry)
+
+            # Extract tags from RSS entry
+            tags = self._extract_tags(entry, categories)
+
+            # Extract author information
+            author = self._extract_author(entry)
+
             # Clean HTML from summary and content
             summary = self._clean_html(summary)
             content = self._clean_html(content)
-            
+
+            # Generate slug from title
+            slug = self._generate_slug(title)
+
             source_name = self._extract_source_name(source_url)
-            
+
             article = {
                 'id': self.generate_article_id(title, link, source_name),
                 'title': title,
-                'link': link,
+                'url': link,
+                'link': link,  # Keep both for compatibility
                 'summary': summary,
                 'content': content,
-                'published': published.isoformat(),
-                'source_url': source_url,
+                'date': published.isoformat(),
+                'published': published.isoformat(),  # Keep both for compatibility
+                'author': author,
+                'slug': slug,
+                'categories': categories,
+                'tags': tags,
+                'source_feed': source_url,
+                'source_url': source_url,  # Keep both for compatibility
                 'source_name': source_name,
                 'category': category,
                 'fetched_at': datetime.now().isoformat()
             }
-            
+
             return article
-            
+
         except Exception as e:
             logger.error(f"Error parsing RSS entry: {str(e)}")
             return None
     
     def _extract_content(self, entry: Any) -> str:
-        """Extract content from RSS entry."""
+        """Extract content from RSS entry using enhanced method from rss.py."""
         content = ""
-        
-        # Try different content fields
+
+        # Try different content fields in order of preference
         if hasattr(entry, 'content') and entry.content:
-            content = entry.content[0].value if isinstance(entry.content, list) else entry.content
-        elif hasattr(entry, 'description'):
+            if isinstance(entry.content, list) and len(entry.content) > 0:
+                content = entry.content[0].value
+            else:
+                content = str(entry.content)
+        elif hasattr(entry, 'description') and entry.description:
             content = entry.description
-        elif hasattr(entry, 'summary'):
+        elif hasattr(entry, 'summary') and entry.summary:
             content = entry.summary
-        
+        elif hasattr(entry, 'summary_detail') and entry.summary_detail:
+            content = entry.summary_detail.value
+
         return content
+
+    def _extract_categories(self, entry: Any) -> List[str]:
+        """Extract categories from RSS entry."""
+        categories = []
+
+        if hasattr(entry, 'tags') and entry.tags:
+            categories = [tag.term for tag in entry.tags if hasattr(tag, 'term')]
+        elif hasattr(entry, 'category') and entry.category:
+            if isinstance(entry.category, list):
+                categories = entry.category
+            else:
+                categories = [entry.category]
+
+        return categories
+
+    def _extract_tags(self, entry: Any, categories: List[str]) -> List[str]:
+        """Extract tags from RSS entry."""
+        tags = []
+
+        if hasattr(entry, 'tags') and entry.tags:
+            for tag in entry.tags:
+                if hasattr(tag, 'term') and tag.term:
+                    tags.append(tag.term)
+                elif hasattr(tag, 'label') and tag.label:
+                    tags.append(tag.label)
+
+        # Use categories as tags if no tags found
+        if not tags and categories:
+            tags = categories.copy()
+
+        return tags
+
+    def _extract_author(self, entry: Any) -> str:
+        """Extract author information from RSS entry."""
+        author = ""
+
+        if hasattr(entry, 'author') and entry.author:
+            author = entry.author
+        elif hasattr(entry, 'author_detail') and entry.author_detail:
+            author = entry.author_detail.get('name', '')
+
+        return author
+
+    def _generate_slug(self, title: str) -> str:
+        """Generate URL-friendly slug from title."""
+        if not title:
+            return ""
+
+        slug = title.lower().replace(" ", "-").replace("'", "").replace('"', '')
+        # Remove other special characters
+        import re
+        slug = re.sub(r'[^a-z0-9\-]', '', slug)
+        # Remove multiple consecutive dashes
+        slug = re.sub(r'-+', '-', slug)
+        # Remove leading/trailing dashes
+        slug = slug.strip('-')
+
+        return slug
     
     def _clean_html(self, text: str) -> str:
         """Remove HTML tags and clean text."""
@@ -207,6 +335,10 @@ class NewsFetcher:
                 all_articles.extend(articles)
 
         logger.info(f"Fetched total of {len(all_articles)} articles from all feeds")
+
+        # Save seen articles for deduplication
+        self._save_seen_articles()
+
         return all_articles
 
     def fetch_by_category(self, category: str) -> List[Dict[str, Any]]:
@@ -256,8 +388,8 @@ class NewsFetcher:
         """
         os.makedirs(settings.raw_news_dir, exist_ok=True)
         
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"raw_articles_{timestamp}.json"
+        timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M")
+        filename = f"raw_news_{timestamp}.json"
         filepath = os.path.join(settings.raw_news_dir, filename)
         
         with open(filepath, 'w', encoding='utf-8') as f:

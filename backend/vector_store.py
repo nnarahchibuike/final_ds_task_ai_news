@@ -66,11 +66,15 @@ class VectorStore:
             texts_for_embedding = []
 
             for i, article in enumerate(articles):
-                # Create unique ID using hash of title and link
-                content_hash = hashlib.md5(
-                    f"{article.get('title', '')}{article.get('link', '')}".encode()
-                ).hexdigest()
-                article_id = f"{article.get('source_name', 'unknown')}_{content_hash}"
+                # Use processed ID if available, otherwise generate one
+                if article.get('processed_id'):
+                    article_id = article['processed_id']
+                else:
+                    # Create unique ID using hash of title and link (fallback)
+                    content_hash = hashlib.md5(
+                        f"{article.get('title', '')}{article.get('link', '')}".encode()
+                    ).hexdigest()
+                    article_id = f"{article.get('source_name', 'unknown')}_{content_hash}"
 
                 # Prepare text for embedding
                 text = self.embedding_generator.prepare_text_for_embedding(article)
@@ -91,13 +95,20 @@ class VectorStore:
                 vectors = []
                 for j, (article_id, text, article) in enumerate(batch):
                     # Prepare metadata (Pinecone has metadata size limits)
+                    # Use AI-enhanced data when available
+                    summary = article.get('ai_summary', article.get('summary', ''))
+                    tags = article.get('enhanced_tags', article.get('tags', []))
+                    categories = article.get('enhanced_categories', article.get('categories', []))
+
                     metadata = {
                         'title': article.get('title', '')[:1000],  # Limit length
                         'link': article.get('link', ''),
-                        'summary': article.get('summary', '')[:2000],  # Limit length
+                        'summary': summary[:2000],  # Limit length - prefer AI summary
                         'published': article.get('published', ''),
                         'source_name': article.get('source_name', ''),
-                        'category': article.get('category', 'general'),
+                        'category': categories[0] if categories else article.get('category', 'general'),
+                        'tags': tags[:10] if isinstance(tags, list) else [],  # Limit number of tags
+                        'ai_enhanced': article.get('ai_enhanced', False),
                         'added_to_db': datetime.now().isoformat(),
                         'content_preview': text[:500]  # Store preview of content
                     }
@@ -278,6 +289,82 @@ class VectorStore:
         except Exception as e:
             logger.error(f"Error getting article by ID {article_id}: {str(e)}")
             return None
+
+    def search_similar_by_id(self, article_id: str, n_results: int = None, exclude_source: bool = True) -> List[Dict[str, Any]]:
+        """
+        Search for articles similar to a specific article using its existing vector.
+        This is much more efficient than creating a text query and re-embedding.
+
+        Args:
+            article_id: ID of the source article to find similar articles for
+            n_results: Number of results to return (default from settings)
+            exclude_source: Whether to exclude the source article from results
+
+        Returns:
+            List of similar articles with metadata, excluding the source article if requested
+        """
+        if n_results is None:
+            n_results = settings.max_recommendations
+
+        try:
+            logger.info(f"Searching for articles similar to article ID: {article_id}")
+
+            # First, fetch the source article to get its vector
+            fetch_result = self.index.fetch(
+                ids=[article_id],
+                namespace=self.namespace
+            )
+
+            if article_id not in fetch_result.vectors:
+                logger.warning(f"Article with ID {article_id} not found")
+                return []
+
+            # Get the source article's vector
+            source_vector = fetch_result.vectors[article_id].values
+
+            # Search using the existing vector directly (no re-embedding needed!)
+            search_results = self.index.query(
+                vector=source_vector,
+                top_k=n_results + (1 if exclude_source else 0),  # +1 to account for source article
+                include_metadata=True,
+                namespace=self.namespace
+            )
+
+            # Format results
+            articles = []
+            for match in search_results.matches:
+                # Skip the source article if requested
+                if exclude_source and match.id == article_id:
+                    continue
+
+                similarity_score = match.score
+
+                # Filter by similarity threshold
+                if similarity_score >= settings.similarity_threshold:
+                    metadata = match.metadata
+                    article = {
+                        'id': match.id,
+                        'title': metadata.get('title', ''),
+                        'link': metadata.get('link', ''),
+                        'summary': metadata.get('summary', ''),
+                        'published': metadata.get('published', ''),
+                        'source_name': metadata.get('source_name', ''),
+                        'category': metadata.get('category', 'general'),
+                        'similarity_score': similarity_score,
+                        'content_preview': metadata.get('content_preview', '')
+                    }
+                    articles.append(article)
+
+                    # Stop if we have enough results
+                    if len(articles) >= n_results:
+                        break
+
+            logger.info(f"Found {len(articles)} similar articles for article {article_id}")
+            return articles
+
+        except Exception as e:
+            logger.error(f"Error searching for similar articles by ID {article_id}: {str(e)}")
+            raise
     
     def get_collection_stats(self) -> Dict[str, Any]:
         """

@@ -1,27 +1,28 @@
 """
 FastAPI main application for DS Task AI News.
 """
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from typing import Optional
+from datetime import datetime
+from pathlib import Path
 from loguru import logger
 
 try:
     # Try absolute imports first (when run directly or from root)
     from config import get_settings
-    from news_fetcher import get_news_fetcher
     from vector_store import get_vector_store
     from recommender import get_news_recommender
 except ImportError:
     try:
         # Try relative imports (when run as module)
         from .config import get_settings
-        from .news_fetcher import get_news_fetcher
         from .vector_store import get_vector_store
         from .recommender import get_news_recommender
     except ImportError:
         # Try backend.module imports (when imported from root directory)
         from backend.config import get_settings
-        from backend.news_fetcher import get_news_fetcher
         from backend.vector_store import get_vector_store
         from backend.recommender import get_news_recommender
 
@@ -29,7 +30,24 @@ except ImportError:
 settings = get_settings()
 
 # Create FastAPI app
-app = FastAPI()
+app = FastAPI(title="AI News Hub", description="AI-powered news aggregation and recommendation system")
+
+# Setup static files serving for frontend
+frontend_dir = Path(__file__).parent.parent / "frontend"
+if frontend_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(frontend_dir)), name="static")
+    logger.info(f"Frontend static files mounted from: {frontend_dir}")
+else:
+    logger.warning(f"Frontend directory not found at: {frontend_dir}")
+
+@app.get("/")
+async def serve_frontend():
+    """Serve the frontend index.html at the root path."""
+    frontend_file = frontend_dir / "index.html"
+    if frontend_file.exists():
+        return FileResponse(str(frontend_file))
+    else:
+        return {"message": "AI News Hub API", "docs": "/docs", "frontend": "Frontend not found"}
 
 
 
@@ -59,14 +77,33 @@ async def recommend_news(article_id: str, max_results: Optional[int] = None):
             raise HTTPException(status_code=404, detail=f"Article with ID '{article_id}' not found")
 
         # Get similar articles
-        articles = recommender.get_similar_articles(
+        raw_articles = recommender.get_similar_articles(
             article_id=article_id,
             max_results=max_results
         )
 
+        # Format articles to match the expected frontend structure
+        formatted_articles = []
+        for article in raw_articles:
+            formatted_article = {
+                "id": article.get('id', ''),
+                "title": article.get('title', ''),
+                "content": article.get('content_preview', ''),
+                "date": article.get('published', ''),  # Map 'published' to 'date'
+                "url": article.get('link', ''),
+                "source": article.get('source_name', ''),
+                "categories": [article.get('category', 'general')],
+                "tags": [],  # Vector store doesn't return tags in search results
+                "summary": article.get('summary', ''),
+                "author": '',
+                "slug": '',
+                "similarity_score": article.get('similarity_score', 0)
+            }
+            formatted_articles.append(formatted_article)
+
         return {
-            "articles": articles,
-            "total_results": len(articles)
+            "articles": formatted_articles,
+            "total_results": len(formatted_articles)
         }
 
     except HTTPException:
@@ -78,67 +115,141 @@ async def recommend_news(article_id: str, max_results: Optional[int] = None):
 
 
 def format_article_with_id(article: dict) -> dict:
-    """Format article with consistent ID generation matching Pinecone logic."""
+    """Format article with uniform ID generation using MD5 hash."""
     import hashlib
+    import re
 
+    # Generate uniform ID: {source_name}_{md5_hash}
     content_hash = hashlib.md5(
-        f"{article.get('title', '')}{article.get('link', '')}".encode()
+        f"{article.get('title', '')}{article.get('url', article.get('link', ''))}".encode()
     ).hexdigest()
-    article_id = f"{article.get('source_name', 'unknown')}_{content_hash}"
+
+    # Extract and clean source name
+    source_feed = article.get('source_feed', article.get('source_url', 'unknown'))
+    source_name = source_feed.split('/')[-1].replace('.xml', '').replace('.rss', '').replace('.', '_')
+    source_name = re.sub(r'[^a-zA-Z0-9_]', '_', source_name)
+
+    article_id = f"{source_name}_{content_hash}"
 
     return {
         "id": article_id,
         "title": article.get('title', ''),
         "content": article.get('content', ''),
-        "date": article.get('published', ''),
-        "link": article.get('link', ''),
-        "source": article.get('source_url', ''),
-        "categories": [article.get('category', 'general')],
-        "summary": article.get('summary', '')
+        "date": article.get('date', article.get('published', '')),
+        "url": article.get('url', article.get('link', '')),
+        "source": article.get('source_feed', article.get('source_url', '')),
+        "categories": article.get('categories', [article.get('category', 'general')] if article.get('category') else []),
+        "tags": article.get('tags', []),
+        "summary": article.get('summary', ''),
+        "author": article.get('author', ''),
+        "slug": article.get('slug', '')
     }
 
 
-async def save_to_vector_store(articles: list):
-    """Background task to save articles to vector store."""
+def get_latest_processed_articles() -> tuple[list, dict]:
+    """
+    Load the latest processed articles from the pipeline output.
+
+    Looks for the most recent processed file in the data/processed_news directory.
+    Supports both timestamped files (processed_news_YYYYMMDD_HHMMSS.json)
+    and the legacy latest_articles.json format.
+
+    Returns:
+        Tuple of (articles_list, metadata_dict)
+    """
+    import json
+    import glob
+    from pathlib import Path
+
+    processed_dir = Path(settings.processed_news_dir)
+
+    # First, try to find timestamped processed files
+    processed_pattern = str(processed_dir / "processed_news_*.json")
+    processed_files = glob.glob(processed_pattern)
+
+    # Also check for API articles files
+    api_pattern = str(processed_dir / "api_articles_*.json")
+    api_files = glob.glob(api_pattern)
+
+    # Combine all processed files
+    all_files = processed_files + api_files
+
+    # Fallback to legacy latest_articles.json if no timestamped files found
+    legacy_file = processed_dir / "latest_articles.json"
+    if not all_files and legacy_file.exists():
+        all_files = [str(legacy_file)]
+
+    if not all_files:
+        logger.warning("No processed articles found. Please run the pipeline first: python pipeline.py")
+        return [], {"error": "No processed articles available", "last_processed": None}
+
+    # Sort files by modification time (most recent first)
+    all_files.sort(key=lambda x: Path(x).stat().st_mtime, reverse=True)
+    latest_file = Path(all_files[0])
+
     try:
-        logger.info("Starting background save to vector store")
-        vector_store = get_vector_store()
-        added_count = vector_store.add_articles(articles)
-        logger.info(f"Successfully saved {added_count} articles to vector store")
+        with open(latest_file, 'r', encoding='utf-8') as f:
+            articles = json.load(f)
+
+        # Get file modification time for metadata
+        last_modified = latest_file.stat().st_mtime
+        last_processed = datetime.fromtimestamp(last_modified).isoformat()
+
+        metadata = {
+            "total_articles": len(articles),
+            "last_processed": last_processed,
+            "source_file": str(latest_file),
+            "pipeline_required": False,
+            "available_files": len(all_files)
+        }
+
+        logger.info(f"Loaded {len(articles)} processed articles from {latest_file}")
+        return articles, metadata
+
     except Exception as e:
-        logger.error(f"Error in background vector store save: {str(e)}")
+        logger.error(f"Error loading processed articles: {str(e)}")
+        return [], {"error": str(e), "last_processed": None}
 
 
 @app.get("/fetch-news")
-async def fetch_news(background_tasks: BackgroundTasks = BackgroundTasks()):
-    """Fetch latest news from RSS feeds and return articles."""
+async def fetch_news():
+    """
+    Fetch latest processed news articles from the pipeline output.
+
+    This endpoint now reads from pre-processed files created by the standalone pipeline.
+    To get fresh articles, run: python pipeline.py
+    """
     try:
-        logger.info("News fetch requested")
+        logger.info("News fetch requested - loading from processed files")
 
-        # Fetch articles immediately (fast operation)
-        news_fetcher = get_news_fetcher()
-        articles = news_fetcher.fetch_all_feeds()
+        # Load processed articles from pipeline output
+        articles, metadata = get_latest_processed_articles()
 
-        if articles:
-            # Start background tasks for saving (slow operations)
-            background_tasks.add_task(save_to_vector_store, articles)
-            background_tasks.add_task(news_fetcher.save_raw_articles, articles)
+        if metadata.get("error"):
+            raise HTTPException(
+                status_code=404,
+                detail=f"No processed articles available. {metadata['error']}. Please run the pipeline first: python pipeline.py"
+            )
 
-            # Format articles with proper IDs for immediate return
-            formatted_articles = [format_article_with_id(article) for article in articles]
-
-            return {
-                "status": "success",
-                "articles": formatted_articles
+        return {
+            "status": "success",
+            "message": f"Loaded {len(articles)} processed articles",
+            "total_articles": len(articles),
+            "last_processed": metadata.get("last_processed"),
+            "articles": articles[:50],  # Return first 50 for preview
+            "metadata": {
+                "total_available": len(articles),
+                "last_pipeline_run": metadata.get("last_processed"),
+                "data_source": "pre-processed",
+                "note": "To refresh articles, run: python pipeline.py"
             }
-        else:
-            return {
-                "status": "success",
-                "articles": []
-            }
+        }
 
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
     except Exception as e:
-        logger.error(f"Error fetching news: {str(e)}")
+        logger.error(f"Error in fetch-news: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
